@@ -55,24 +55,8 @@ namespace EventsApi.DAL
                                 Subcategory = reader["subcategory"] != DBNull.Value ? Convert.ToInt32(reader["subcategory"]) : null,
                                 RigorRank = reader["rigorRank"] != DBNull.Value ? Convert.ToInt32(reader["rigorRank"]) : null
                             };
-
-                            string imageQuery = "SELECT FileName FROM Images WHERE EventId = @eventId";
-                            using (SqlCommand imageCommand = new SqlCommand(imageQuery, connection))
-                            {
-                                imageCommand.Parameters.AddWithValue("@EventId", id);
-                                List<Image> Images = new();
-                                using (SqlDataReader imageReader = imageCommand.ExecuteReader())
-                                {
-                                    while (imageReader.Read())
-                                    {
-                                        // Retrieve event image URL
-                                        string filename = imageReader.GetString(0);
-                                        Images.Add(new Image { FileName = filename });
-                                    }
-                                    eventDTO.Images = Images;
-                                }
-                            }
-
+                                                        
+                            eventDTO.Images = getEventImages(connection, id);
                             return eventDTO;
                         }
                         else
@@ -544,23 +528,8 @@ namespace EventsApi.DAL
                                 Subcategory = reader["subcategory"] != DBNull.Value ? Convert.ToInt32(reader["subcategory"]) : null,
                                 RigorRank = reader["rigorRank"] != DBNull.Value ? Convert.ToInt32(reader["rigorRank"]) : null
                             };
-                            string imageQuery = "SELECT FileName FROM Images WHERE EventId = @eventId";
-                            using (SqlCommand imageCommand = new SqlCommand(imageQuery, connection))
-                            {
-                                imageCommand.Parameters.AddWithValue("@EventId", eventDTO.Id);
-                                List<Image> Images = new();
-                                using (SqlDataReader imageReader = imageCommand.ExecuteReader())
-                                {
-                                    while (imageReader.Read())
-                                    {
-                                        // Retrieve event image URL
-                                        string filename = imageReader.GetString(0);
-                                        Images.Add(new Image { FileName = filename });
-                                    }
-                                    eventDTO.Images = Images;
-                                }
-                            }
-
+                            
+                            eventDTO.Images = getEventImages(connection, (int)eventDTO.Id);
                             events.Add(eventDTO);
                         }
 
