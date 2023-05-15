@@ -43,17 +43,30 @@ namespace EventsApi.Controllers
                     [FromQuery(Name = "limit")] int limit,
                     [FromQuery(Name = "page")] int page )
         {
-            
-            if (type.ToLower() != "latest")
+            try
             {
-                return BadRequest("Invalid type parameter. Only 'latest' is supported.");
+
+                if (type == null || limit < 1 || page < 1)
+                {
+                    return BadRequest("Invalid parameters. Please check parameters.");
+                }
+                if (type.ToLower() != "latest")
+                {
+                    return BadRequest("Invalid type parameter. Only 'latest' is supported.");
+                }
+
+                int offset = (page - 1) * limit;
+
+                List<EventDTO> events = await _eventsDAL.GetRecentEventsPaged(page, limit);
+                if (events.Count == 0)
+                    return Ok("No records found for given Page & Limit");
+                else
+                    return events;
             }
-
-            int offset = (page - 1) * limit;
-
-            List<EventDTO> events = await _eventsDAL.GetRecentEventsPaged(page, limit);
-
-            return events;
+            catch (Exception ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
         }
 
 
@@ -118,7 +131,6 @@ namespace EventsApi.Controllers
             {
                 return BadRequest(new { error = ex.Message });
             }
-
         }
     }
 }

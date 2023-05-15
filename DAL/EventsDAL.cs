@@ -27,19 +27,21 @@ namespace EventsApi.DAL
 
         public async Task<EventDTO> GetEventById(int id)
         {
-
             using (SqlConnection connection = new SqlConnection(_connectionString))
             {
+                connection.ConnectionString += ";MultipleActiveResultSets=True";
+
                 await connection.OpenAsync();
                 string query = "SELECT * FROM Events WHERE Id = @Id";
                 using (SqlCommand command = new SqlCommand(query, connection))
                 {
+                    EventDTO eventDTO = null;
                     command.Parameters.AddWithValue("@Id", id);
                     using (SqlDataReader reader = await command.ExecuteReaderAsync())
                     {
                         if (reader.Read())
                         {
-                            EventDTO eventDTO = new EventDTO
+                            eventDTO = new EventDTO
                             {
                                 Id = reader["id"] != DBNull.Value ? Convert.ToInt32(reader["id"]) : null,
                                 Name = reader["name"] != DBNull.Value ? Convert.ToString(reader["name"]) : null,
@@ -54,6 +56,23 @@ namespace EventsApi.DAL
                                 RigorRank = reader["rigorRank"] != DBNull.Value ? Convert.ToInt32(reader["rigorRank"]) : null
                             };
 
+                            string imageQuery = "SELECT FileName FROM Images WHERE EventId = @eventId";
+                            using (SqlCommand imageCommand = new SqlCommand(imageQuery, connection))
+                            {
+                                imageCommand.Parameters.AddWithValue("@EventId", id);
+                                List<Image> Images = new();
+                                using (SqlDataReader imageReader = imageCommand.ExecuteReader())
+                                {
+                                    while (imageReader.Read())
+                                    {
+                                        // Retrieve event image URL
+                                        string filename = imageReader.GetString(0);
+                                        Images.Add(new Image { FileName = filename });
+                                    }
+                                    eventDTO.Images = Images;
+                                }
+                            }
+
                             return eventDTO;
                         }
                         else
@@ -61,8 +80,30 @@ namespace EventsApi.DAL
                             return null;
                         }
                     }
+                    //eventDTO.Images = getEventImages(connection, id);
+                    //return eventDTO;
                 }
             }
+        }
+
+        private List<Image> getEventImages(SqlConnection connection, int eventId)
+        {
+            List<Image> Images = new();
+            string getImgQuery = "SELECT FileName FROM Images WHERE EventId = @eventId";
+            SqlCommand command = new SqlCommand(getImgQuery, connection);
+
+            command.CommandText = getImgQuery;
+            command.Parameters.AddWithValue("@eventId", eventId);
+
+            using (SqlDataReader reader = command.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    string filename = reader.GetString(0);
+                    Images.Add( new Image { FileName = filename });
+                }
+            }
+            return Images;
         }
 
 
@@ -71,8 +112,14 @@ namespace EventsApi.DAL
             using (SqlConnection connection = new SqlConnection(_connectionString))
             {
                 await connection.OpenAsync();
+                // Create a transaction
+                var transaction = connection.BeginTransaction();
 
-                string query = @"INSERT INTO [Events]
+                try
+                {
+                    checkImagesValid(eventDTOinput.Images);
+
+                    string query = @"INSERT INTO [Events]
                                            ([name]
                                            ,[uid]
                                            ,[type]
@@ -95,11 +142,8 @@ namespace EventsApi.DAL
                                            ,@subcategory
                                            ,@rigorrank); SELECT SCOPE_IDENTITY();";
 
-                // Create a transaction
-                var transaction = connection.BeginTransaction();
 
-                try
-                {
+
                     using (SqlCommand command = new SqlCommand(query, connection, transaction))
                     {
                         // 1. first insert Event details in db
@@ -126,7 +170,6 @@ namespace EventsApi.DAL
 
                         if (eventDTOinput.Images != null)
                         {
-                            checkImagesValid(eventDTOinput.Images);
 
                             foreach (var image in eventDTOinput.Images)
                             {
@@ -157,19 +200,19 @@ namespace EventsApi.DAL
                 }
                 catch (ArgumentException ex)
                 {
+                    transaction.Rollback();
                     throw new ArgumentException(ex.Message);
                 }
                 catch (Exception ex)
                 {
                     transaction.Rollback();
-                    return -1;
-
-                    //throw ex;
+                    throw new Exception(ex.Message);
                 }
-
             }
 
         }
+
+
         private async Task<string> saveImage(IFormFile image)
         {
             try
@@ -184,7 +227,7 @@ namespace EventsApi.DAL
 
                 using (var stream = new FileStream(filePath, FileMode.Create))
                 {
-                    await image.CopyToAsync(stream);
+                    await image.CopyToAsync(stream);                    
                 }
 
                 return fileName;
@@ -192,12 +235,15 @@ namespace EventsApi.DAL
             catch (Exception)
             {
                 throw;
-            }            
+            }
         }
         private void checkImagesValid(ICollection<IFormFile> images)
         {
-            var invalidImages = new List<string>();
+            if (images == null)
+                return;
 
+            var invalidImages = new List<string>();
+            
             foreach (var image in images)
             {
                 var ext = Path.GetExtension(image.FileName).ToLower();
@@ -216,27 +262,93 @@ namespace EventsApi.DAL
             // otherwise exception is thrown
         }
 
+        private void deleteEventImages(int eventId)
+        {
+            List<string> filenames = new List<string>();
+
+            try
+            {
+                using (SqlConnection connection = new SqlConnection(_connectionString))
+                {
+                    connection.Open();
+
+                    string query = "SELECT FileName FROM Images WHERE EventId = @eventId";
+
+                    using (SqlCommand command = new SqlCommand(query, connection))
+                    {
+                        command.Parameters.AddWithValue("@eventId", eventId);
+
+                        using (SqlDataReader reader = command.ExecuteReader())
+                        {
+                            while (reader.Read())
+                            {
+                                string filename = reader.GetString(0);
+                                filenames.Add(filename);
+                            }                            
+                        }
+                    }                    
+                }
+
+                foreach (var file in filenames)
+                {
+                    deleteImage(file);
+                }
+            }
+            catch (Exception ex)
+            {
+                // handle exception
+            }
+        }
+
+        private void deleteImage(string fileName)
+        {
+            string _imagesFolderPath = Path.Combine(
+                       Directory.GetCurrentDirectory(), "UploadedImages");
+
+            string filePath = Path.Combine(_imagesFolderPath, fileName);
+                        
+            try
+            {
+                // Check if the file exists
+                if (File.Exists(filePath))
+                {
+                    // Delete the file
+                    File.Delete(filePath);                 
+                }                
+            }
+            catch (Exception ex)
+            {   
+                throw new Exception($"An error occurred while deleting the file: {ex.Message}");
+            }
+        }
 
         public async Task<int> editEvent(EventDTOinput eventDTOinput)
         {
+
             using (SqlConnection connection = new SqlConnection(_connectionString))
             {
                 await connection.OpenAsync();
+                // Create a transaction
+                var transaction = connection.BeginTransaction();
 
-                // Check if the event exists in the Events table
-                string checkEventQuery = "SELECT COUNT(*) FROM [Events] WHERE [Id] = @eventId";
-                using (SqlCommand checkEventCmd = new SqlCommand(checkEventQuery, connection))
+                try
                 {
-                    checkEventCmd.Parameters.AddWithValue("@eventId", eventDTOinput.Id);
-                    int eventCount = (int)await checkEventCmd.ExecuteScalarAsync();
+                    checkImagesValid(eventDTOinput.Images);
 
-                    if (eventCount == 0) // Event doesn't exist
+                    // Check if the event exists in the Events table
+                    string checkEventQuery = "SELECT COUNT(*) FROM [Events] WHERE [Id] = @eventId";
+                    using (SqlCommand checkEventCmd = new SqlCommand(checkEventQuery, connection, transaction))
                     {
-                        return 0;
-                    }
-                }
+                        checkEventCmd.Parameters.AddWithValue("@eventId", eventDTOinput.Id);
+                        int eventCount = (int)await checkEventCmd.ExecuteScalarAsync();
 
-                string query = @"UPDATE [Events]
+                        if (eventCount == 0) // Event doesn't exist
+                        {
+                            return 0;
+                        }
+                    }
+
+                    string query = @"UPDATE [Events]
                                  SET [name] = @name,
                                      [tagline] = @tagline,
                                      [schedule] = @schedule,
@@ -247,12 +359,10 @@ namespace EventsApi.DAL
                                      [rigorrank] = @rigorrank
                                  WHERE [id] = @id";
 
-                // Create a transaction
-                var transaction = connection.BeginTransaction();
-                int rowsEdited = -1;
 
-                try
-                {
+                    int rowsEdited = -1;
+
+
                     using (SqlCommand command = new SqlCommand(query, connection, transaction))
                     {
                         command.Parameters.AddWithValue("@name", eventDTOinput.Name);
@@ -272,19 +382,17 @@ namespace EventsApi.DAL
                     }
 
                     // delete all existing images for this event
-                    var deleteImagesCmd = new SqlCommand(
-                        @"DELETE FROM [Images]
-                          WHERE [EventId] = @eventId"
-                                , connection, transaction
-                            );
-                    deleteImagesCmd.Parameters.AddWithValue("@eventId", eventDTOinput.Id);
-                    await deleteImagesCmd.ExecuteNonQueryAsync();
+                    //var deleteImagesCmd = new SqlCommand(
+                    //    @"DELETE FROM [Images]
+                    //      WHERE [EventId] = @eventId"
+                    //            , connection, transaction
+                    //        );
+                    //deleteImagesCmd.Parameters.AddWithValue("@eventId", eventDTOinput.Id);
+                    //await deleteImagesCmd.ExecuteNonQueryAsync();
 
-                    // now insert all Images to db
+                    
                     if (eventDTOinput.Images != null)
                     {
-                        checkImagesValid(eventDTOinput.Images);
-
                         foreach (var image in eventDTOinput.Images)
                         {
                             // 2. now insert all Images to db
@@ -311,14 +419,18 @@ namespace EventsApi.DAL
                     transaction.Commit();
                     return rowsEdited;
                 }
+                catch (ArgumentException ex)
+                {
+                    transaction.Rollback();
+                    throw new ArgumentException(ex.Message);
+                }
                 catch (Exception ex)
                 {
                     transaction.Rollback();
-                    return -1;
-
-                    //throw ex;
+                    throw new Exception(ex.Message);
                 }
             }
+
         }
 
 
@@ -356,17 +468,23 @@ namespace EventsApi.DAL
                         int count = await command.ExecuteNonQueryAsync();
 
                         // Check if event was successfully deleted
-                        if (count > 0)
+                        if (count == 1)
                         {
                             // Delete all images associated with the event
+
+                            deleteEventImages(eventId); // delete files
+
                             var cmd = new SqlCommand(
                                 @"DELETE FROM [Images] WHERE [EventId] = @eventId",
                                 connection, transaction
                             );
                             cmd.Parameters.AddWithValue("@eventId", eventId);
-                            await cmd.ExecuteNonQueryAsync();
-
+                            
+                            // delete from table
+                            object result = await cmd.ExecuteNonQueryAsync();
+                            
                             transaction.Commit();
+                            
                             return count;
                         }
                         else
@@ -379,10 +497,9 @@ namespace EventsApi.DAL
                 catch (Exception ex)
                 {
                     transaction.Rollback();
-                    return -1;
-                    //throw ex;
-                }
-            }
+                    throw new Exception(ex.Message);
+                }                
+            }            
         }
 
 
@@ -390,12 +507,15 @@ namespace EventsApi.DAL
         {
             using (SqlConnection connection = new SqlConnection(_connectionString))
             {
+                connection.ConnectionString += ";MultipleActiveResultSets=True";
+
                 await connection.OpenAsync();
 
                 string query = @"SELECT * 
                                  FROM [Events]
-                                 ORDER BY [schedule] DESC
-                                 OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
+                                 ORDER BY [schedule] DESC, [id] DESC
+                                 OFFSET @Offset ROWS 
+                                 FETCH NEXT @PageSize ROWS ONLY";
 
                 int offset = (pageNumber - 1) * pageSize;
 
@@ -424,6 +544,22 @@ namespace EventsApi.DAL
                                 Subcategory = reader["subcategory"] != DBNull.Value ? Convert.ToInt32(reader["subcategory"]) : null,
                                 RigorRank = reader["rigorRank"] != DBNull.Value ? Convert.ToInt32(reader["rigorRank"]) : null
                             };
+                            string imageQuery = "SELECT FileName FROM Images WHERE EventId = @eventId";
+                            using (SqlCommand imageCommand = new SqlCommand(imageQuery, connection))
+                            {
+                                imageCommand.Parameters.AddWithValue("@EventId", eventDTO.Id);
+                                List<Image> Images = new();
+                                using (SqlDataReader imageReader = imageCommand.ExecuteReader())
+                                {
+                                    while (imageReader.Read())
+                                    {
+                                        // Retrieve event image URL
+                                        string filename = imageReader.GetString(0);
+                                        Images.Add(new Image { FileName = filename });
+                                    }
+                                    eventDTO.Images = Images;
+                                }
+                            }
 
                             events.Add(eventDTO);
                         }
@@ -433,11 +569,6 @@ namespace EventsApi.DAL
                 }
             }
         }
-
-
-
-
-
 
     }
 }
